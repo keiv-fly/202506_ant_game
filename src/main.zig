@@ -1,46 +1,100 @@
-//! By convention, main.zig is where your main function lives in the case that
-//! you are building an executable. If you are making a library, the convention
-//! is to delete this file and start with root.zig instead.
-
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
-
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    try bw.flush(); // Don't forget to flush!
-}
-
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "use other module" {
-    try std.testing.expectEqual(@as(i32, 150), lib.add(100, 50));
-}
-
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
-}
-
 const std = @import("std");
 
-/// This imports the separate module containing `root.zig`. Take a look in `build.zig` for details.
-const lib = @import("_20250614_ant_game_lib");
+const Position = struct {
+    x: usize,
+    y: usize,
+};
+
+pub fn applyMove(input: u8, pos: *Position, width: usize, height: usize) void {
+    switch (input) {
+        'w' => {
+            if (pos.y > 0) pos.y -= 1;
+        },
+        's' => {
+            if (pos.y + 1 < height) pos.y += 1;
+        },
+        'a' => {
+            if (pos.x > 0) pos.x -= 1;
+        },
+        'd' => {
+            if (pos.x + 1 < width) pos.x += 1;
+        },
+        else => {},
+    }
+}
+
+fn render(stdout: anytype, pos: Position, width: usize, height: usize) !void {
+    try stdout.print("\x1b[2J\x1b[H", .{});
+    for (0..height) |y| {
+        for (0..width) |x| {
+            if (x == pos.x and y == pos.y)
+                try stdout.writeByte('@')
+            else
+                try stdout.writeByte('.');
+        }
+        try stdout.writeByte('\n');
+    }
+    try stdout.print("Use WASD to move, q to quit.\n", .{});
+}
+
+pub fn main() !void {
+    const stdout = std.io.getStdOut().writer();
+    const stdin = std.io.getStdIn().reader();
+
+    const width: usize = 20;
+    const height: usize = 10;
+
+    var pos = Position{ .x = width / 2, .y = height / 2 };
+
+    try render(stdout, pos, width, height);
+
+    while (true) {
+        const c = stdin.readByte() catch break;
+        if (c == 'q') break;
+        if (c == '\n' or c == '\r') continue;
+        applyMove(c, &pos, width, height);
+        try render(stdout, pos, width, height);
+    }
+}
+
+test "applyMove works within bounds" {
+    var pos = Position{ .x = 1, .y = 1 };
+    applyMove('w', &pos, 3, 3);
+    try std.testing.expectEqual(@as(usize, 0), pos.y);
+    pos = Position{ .x = 1, .y = 1 };
+    applyMove('s', &pos, 3, 3);
+    try std.testing.expectEqual(@as(usize, 2), pos.y);
+    pos = Position{ .x = 1, .y = 1 };
+    applyMove('a', &pos, 3, 3);
+    try std.testing.expectEqual(@as(usize, 0), pos.x);
+    pos = Position{ .x = 1, .y = 1 };
+    applyMove('d', &pos, 3, 3);
+    try std.testing.expectEqual(@as(usize, 2), pos.x);
+}
+
+test "render prints @ in grid" {
+    var buffer: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    const width: usize = 3;
+    const height: usize = 2;
+    const pos = Position{ .x = 1, .y = 0 };
+    try render(fbs.writer(), pos, width, height);
+    const output = fbs.getWritten();
+
+    var expected_list = std.ArrayList(u8).init(std.testing.allocator);
+    defer expected_list.deinit();
+    try expected_list.writer().print("\x1b[2J\x1b[H", .{});
+    for (0..height) |y| {
+        for (0..width) |x| {
+            if (x == pos.x and y == pos.y)
+                try expected_list.writer().writeByte('@')
+            else
+                try expected_list.writer().writeByte('.');
+        }
+        try expected_list.writer().writeByte('\n');
+    }
+    try expected_list.writer().print("Use WASD to move, q to quit.\n", .{});
+    const expected = try expected_list.toOwnedSlice();
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqualSlices(u8, expected, output);
+}
